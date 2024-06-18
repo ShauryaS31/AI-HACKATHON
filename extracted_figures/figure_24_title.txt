@@ -1,0 +1,1 @@
+Figure 25: Load application in steps as per IACS and ISO 8528-5
