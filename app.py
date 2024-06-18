@@ -69,7 +69,23 @@ def find_relevant_images(alarm_description, images_folder='./extracted_figures',
     
     return relevant_images, image_titles
 
-def generate_chain_of_answers(alarm_id, description, subsystem):
+def load_troubleshoot_data(file_path):
+    """Load the TroubleShoot Excel file and preprocess"""
+    df = pd.read_excel(file_path)
+    df['combined_info'] = df['Error'] + ' ' + df['System'] + ' ' + df['Causes']
+    model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
+    df['embedding'] = df['combined_info'].apply(lambda x: model.encode(x, convert_to_tensor=True))
+    return df
+
+def search_troubleshoot_data(df, query):
+    """Search the TroubleShoot data for the most similar entry"""
+    model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
+    query_embedding = model.encode(query, convert_to_tensor=True)
+    df['similarity'] = df['embedding'].apply(lambda x: util.pytorch_cos_sim(query_embedding, x).item())
+    best_match = df.loc[df['similarity'].idxmax()]
+    return best_match['INFO (Section/Work Card in DO0F466162E Maintenance Manual)'], best_match['Code']
+
+def generate_chain_of_answers(alarm_id, description, subsystem, troubleshoot_df):
     """Generates a chain of answers for the provided input values"""
     try:
         questions = [
@@ -90,10 +106,15 @@ def generate_chain_of_answers(alarm_id, description, subsystem):
         context = f"I received an error code: {alarm_id}. I know from experience that it's a {description} at {subsystem} subsystem."
         responses = {}
         for question in questions:
-            query = f"{context} Please provide answer to the question {question}"
-            answer = fetch_answer_from_llm(query)
-            if question == "What drawings or diagrams (if any) are present in the technical documentation that relate to this alarm?":
-                answer = "Here are the drawings and diagrams from the technical documentation that relate to this alarm"
+            if question == "What possible actions could a crew member take given the alarm? Please provide the Section/Work Card in DO0F466162E Maintenance Manual if possible":
+                query = f"{context} Please provide answer to the question {question}"
+                answer = fetch_answer_from_llm(query)
+                info, code = search_troubleshoot_data(troubleshoot_df, query)
+                answer += f" INFO: {info}, Code: {code}"
+            else:
+                query = f"{context} Please provide answer to the question {question}"
+                answer = fetch_answer_from_llm(query)
+            
             responses[question] = answer
             context += f" {answer}"
             st.markdown(f"<div style='color: #0056b3; font-weight: bold;'>**Question:** {question}</div>", unsafe_allow_html=True)
@@ -126,9 +147,12 @@ def main():
     description = st.text_input("📝 DESCRIPTION")
     subsystem = st.text_input("🛠️ SUBSYSTEM")
 
+    troubleshoot_file_path = "./TroubleShoot.xlsx"  # Update this path to the location of your TroubleShoot Excel file
+    troubleshoot_df = load_troubleshoot_data(troubleshoot_file_path)
+
     if st.button("Get Answers"):
         if alarm_id and description and subsystem:
-            st.session_state.responses = generate_chain_of_answers(alarm_id, description, subsystem)
+            st.session_state.responses = generate_chain_of_answers(alarm_id, description, subsystem, troubleshoot_df)
         else:
             st.markdown("<div style='color: #dc3545;'>Please fill in all the fields.</div>", unsafe_allow_html=True)
 
